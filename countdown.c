@@ -1,35 +1,47 @@
-#define _XOPEN_SOURCE
-
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ucontext.h>
+#include <ucontext.h>
 
-ucontext_t main_context1, main_context2, loop_context;
+#define NUM_COUNTERS 5
 
-void loop(ucontext_t *loop_context, ucontext_t *return_context, int count_from) {
-    for (int i = 0; i < count_from; i++) {
+ucontext_t main_context, loop_context1, loop_context2;
+
+ucontext_t contexts[NUM_COUNTERS];
+int completions[NUM_COUNTERS];
+
+
+void loop(ucontext_t *loop_context, ucontext_t *return_context, int* completion, int count_from) {
+    for (int i = count_from; i > 0; i--) {
         printf("%d\n", i);
         swapcontext(loop_context, return_context);
     }
+    *completion = 1;
 }
 
 int main(int argc, char** argv) {
-    volatile int iterator_finished = 0;
+    char countdown_stack[NUM_COUNTERS][SIGSTKSZ];
 
-    char countdown_stack[SIGSTKSZ];
-    getcontext(&loop_context);
-    loop_context.uc_link = &main_context1;
-    loop_context.uc_stack.ss_sp = &countdown_stack;
-    loop_context.uc_stack.ss_size = sizeof countdown_stack;
+    for (int i = 0; i < NUM_COUNTERS; i++) {
+        getcontext(&contexts[i]);
+        contexts[i].uc_link = &main_context;
+        contexts[i].uc_stack.ss_sp = &countdown_stack[i];
+        contexts[i].uc_stack.ss_size = sizeof countdown_stack[0];
 
-    makecontext(&loop_context, loop, 3, &loop_context, &main_context2, 17);
+        makecontext(&contexts[i], (void (*)(void)) loop, 4, &contexts[i], &main_context, &completions[i], 20 - i*2);
+    }
 
-    getcontext(&main_context1);
+    while (1) {
+        printf("Start going through countdown timers\n");
+        int finished = 1;
+        for (int i = 0; i < NUM_COUNTERS; i++) {
+            if (!completions[i]) {
+                swapcontext(&main_context, &contexts[i]);
+                finished = 0;
+            }
+        }
 
-    if (!iterator_finished) {
-        iterator_finished = 1;
-        while (1) {
-            swapcontext(&main_context2, &loop_context);
+        if (finished) {
+            break;
         }
     }
 }
